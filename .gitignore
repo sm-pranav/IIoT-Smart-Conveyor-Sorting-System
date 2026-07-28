@@ -1,0 +1,31 @@
+# Generated HTML files (built from .md by gen_html.py)
+*.html
+!code/dashboard.html
+
+# PDF exports
+*.pdf
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+.env
+
+# Siemens TIA Portal project files (large, binary)
+*.ap*
+*.zap*
+TIA_Portal/
+
+# snap7 DLL (platform-specific binary)
+snap7.dll
+
+# OS files
+Thumbs.db
+.DS_Store
+
+# IDE
+.vscode/
+.idea/
+
+# Guide files (kept locally, not in repo)
+guides/
