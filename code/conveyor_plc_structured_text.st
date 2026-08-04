@@ -79,3 +79,161 @@ VERSION : 0.1
    END_VAR
 BEGIN
 END_DATA_BLOCK
+
+
+// ============================================================
+// FB3 : "ProductionCounter"  (Structured Text / SCL)
+// ------------------------------------------------------------
+// Counts parts per lane, totals, rejects, and calculates the
+// live production KPIs (OEE, throughput, uptime, speed %).
+// Call this every scan from OB1.
+// ============================================================
+
+FUNCTION_BLOCK "ProductionCounter"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+
+   VAR_INPUT
+      Enable : Bool;                 // Master enable (usually TRUE)
+      Reset : Bool;                  // Reset all counters to zero
+      Divert1 : Bool;                // Diverter 1 pulse (small)  Q0.1
+      Divert2 : Bool;                // Diverter 2 pulse (medium) Q0.2
+      Divert3 : Bool;                // Diverter 3 pulse (large)  Q0.3
+      Entry_Sensor : Bool;           // Object entering conveyor  I0.3
+      Motor_On : Bool;               // Conveyor motor running    Q0.0
+      Speed_Raw : Int;               // Raw setpoint 0..27648 (IW64)
+      OneSec_Clock : Bool;           // 1 Hz clock bit (M10.5)
+      Auto_Mode : Bool;              // AUTO memory bit  (M0.0)
+      Manual_Mode : Bool;            // MANUAL memory bit (M0.1)
+      Alarm : Bool;                  // Any alarm active (from FB4)
+   END_VAR
+
+   VAR
+      Small_Edge : R_TRIG;           // rising edge of diverter 1 pulse
+      Medium_Edge : R_TRIG;          // rising edge of diverter 2 pulse
+      Large_Edge : R_TRIG;           // rising edge of diverter 3 pulse
+      SecEdge : R_TRIG;              // 1 Hz rising edge
+      RejectTimer : TON_TIME;        // Entry with no sort -> reject
+      RejectEdge : R_TRIG;
+      RunSeconds : DInt := 0;        // Time motor has been running
+      PlannedSeconds : DInt := 0;    // Time system has been enabled
+      AnyDivert : Bool;
+      Availability : Real;
+      Performance : Real;
+      Quality : Real;
+   END_VAR
+
+BEGIN
+
+   // --- Reset all counters on command ---
+   IF #Reset THEN
+      "ConveyorData".Total_Count := 0;
+      "ConveyorData".Lane1_Count := 0;
+      "ConveyorData".Lane2_Count := 0;
+      "ConveyorData".Lane3_Count := 0;
+      "ConveyorData".Reject_Count := 0;
+      #RunSeconds := 0;
+      #PlannedSeconds := 0;
+   END_IF;
+
+   // --- Count each lane on the RISING EDGE of its diverter pulse.
+   //     R_TRIG gives a one-scan pulse per box, so we add exactly 1.
+   //     (Simple, always-compiles equivalent of an IEC CTU counter.) ---
+   #Small_Edge(CLK := #Divert1);
+   #Medium_Edge(CLK := #Divert2);
+   #Large_Edge(CLK := #Divert3);
+
+   IF #Small_Edge.Q AND NOT #Reset THEN
+      "ConveyorData".Lane1_Count := "ConveyorData".Lane1_Count + 1;
+   END_IF;
+   IF #Medium_Edge.Q AND NOT #Reset THEN
+      "ConveyorData".Lane2_Count := "ConveyorData".Lane2_Count + 1;
+   END_IF;
+   IF #Large_Edge.Q AND NOT #Reset THEN
+      "ConveyorData".Lane3_Count := "ConveyorData".Lane3_Count + 1;
+   END_IF;
+
+   "ConveyorData".Total_Count := "ConveyorData".Lane1_Count
+                               + "ConveyorData".Lane2_Count
+                               + "ConveyorData".Lane3_Count;
+
+   // --- Reject: object entered but no diverter fired within 3 s ---
+   #AnyDivert := #Divert1 OR #Divert2 OR #Divert3;
+   #RejectTimer(IN := #Entry_Sensor AND NOT #AnyDivert, PT := T#3S);
+   #RejectEdge(CLK := #RejectTimer.Q);
+   IF #RejectEdge.Q AND NOT #Reset THEN
+      "ConveyorData".Reject_Count := "ConveyorData".Reject_Count + 1;
+   END_IF;
+
+   // --- Mirror live sorting + status bits for HMI / dashboard ---
+   //     (Object_Present is written by FB2 Network 1, so not repeated here.)
+   "ConveyorData".Sorting_Small := #Divert1;
+   "ConveyorData".Sorting_Medium := #Divert2;
+   "ConveyorData".Sorting_Large := #Divert3;
+   "ConveyorData".Motor_Running := #Motor_On;
+   "ConveyorData".System_Running := #Motor_On;
+
+   // --- One-second time keeping (driven by 1 Hz clock bit) ---
+   #SecEdge(CLK := #OneSec_Clock);
+   IF #SecEdge.Q AND #Enable THEN
+      #PlannedSeconds := #PlannedSeconds + 1;
+      IF #Motor_On THEN
+         #RunSeconds := #RunSeconds + 1;
+      END_IF;
+   END_IF;
+   "ConveyorData".Uptime_Seconds := #RunSeconds;
+
+   // --- Speed as a percentage (0..27648 raw -> 0..100 %) ---
+   "ConveyorData".Speed_Actual :=
+      REAL_TO_INT(INT_TO_REAL(#Speed_Raw) * 100.0 / 27648.0);
+
+   // --- Throughput (parts per minute since motor started) ---
+   IF #RunSeconds > 0 THEN
+      "ConveyorData".Throughput :=
+         INT_TO_REAL("ConveyorData".Total_Count) / DINT_TO_REAL(#RunSeconds) * 60.0;
+   ELSE
+      "ConveyorData".Throughput := 0.0;
+   END_IF;
+
+   // --- OEE = Availability x Performance x Quality (as a percentage) ---
+   // Availability: how much of enabled time the belt actually ran
+   IF #PlannedSeconds > 0 THEN
+      #Availability := DINT_TO_REAL(#RunSeconds) / DINT_TO_REAL(#PlannedSeconds);
+   ELSE
+      #Availability := 0.0;
+   END_IF;
+
+   // Performance: actual rate vs ideal rate
+   // Ideal rate = 0.5 parts/second (one part every 2 s = 30 parts/min)
+   IF #RunSeconds > 0 THEN
+      #Performance := (INT_TO_REAL("ConveyorData".Total_Count)
+                       / DINT_TO_REAL(#RunSeconds)) / 0.5;
+   ELSE
+      #Performance := 0.0;
+   END_IF;
+   IF #Performance > 1.0 THEN
+      #Performance := 1.0;           // cannot exceed 100 %
+   END_IF;
+
+   // Quality: good parts vs all parts that were handled
+   IF ("ConveyorData".Total_Count + "ConveyorData".Reject_Count) > 0 THEN
+      #Quality := INT_TO_REAL("ConveyorData".Total_Count)
+                  / INT_TO_REAL("ConveyorData".Total_Count + "ConveyorData".Reject_Count);
+   ELSE
+      #Quality := 1.0;
+   END_IF;
+
+   "ConveyorData".OEE := #Availability * #Performance * #Quality * 100.0;
+
+   // --- Translate the mode memory bits into the DB Mode integer ---
+   IF #Alarm THEN
+      "ConveyorData".Mode := 3;      // FAULT overrides everything
+   ELSIF #Auto_Mode THEN
+      "ConveyorData".Mode := 1;      // AUTO
+   ELSIF #Manual_Mode THEN
+      "ConveyorData".Mode := 2;      // MANUAL
+   ELSE
+      "ConveyorData".Mode := 0;      // STOP
+   END_IF;
+
+END_FUNCTION_BLOCK
