@@ -1,4 +1,4 @@
-﻿// ============================================================
+// ============================================================
 // IIoT Smart Conveyor Sorting System
 // Siemens S7-1200 (CPU 1214C) - TIA Portal V18
 // SCL source: DB1 (ConveyorData), FB3 (ProductionCounter), FB4 (AlarmHandler)
@@ -234,6 +234,79 @@ BEGIN
       "ConveyorData".Mode := 2;      // MANUAL
    ELSE
       "ConveyorData".Mode := 0;      // STOP
+   END_IF;
+
+END_FUNCTION_BLOCK
+
+
+// ============================================================
+// FB4 : "AlarmHandler"  (Structured Text / SCL)
+// ------------------------------------------------------------
+// Watches for fault conditions, builds the active alarm code,
+// and drives the master Alarm_Active flag. Call every scan.
+//
+// Alarms are self-clearing: when the physical condition goes
+// away, the alarm clears by itself. Cmd_Reset clears counters
+// (handled in FB3), not the live alarm state.
+// ============================================================
+
+FUNCTION_BLOCK "AlarmHandler"
+{ S7_Optimized_Access := 'TRUE' }
+VERSION : 0.1
+
+   VAR_INPUT
+      EStop_NC : Bool;               // Raw E-Stop input I0.2 (1 = healthy)
+      Jam_Sensor : Bool;             // Jam photo-eye I0.7
+      Small_Sensor : Bool;           // I0.4
+      Medium_Sensor : Bool;          // I0.5
+      Large_Sensor : Bool;           // I0.6
+   END_VAR
+
+   VAR
+      JamTimer : TON_TIME;           // Jam sensor blocked > 5 s
+      SensorSum : Int;
+      SensorFault : Bool;
+      EStop_Pressed : Bool;
+   END_VAR
+
+BEGIN
+
+   // --- E-Stop is wired Normally Closed (fail-safe).
+   //     Input reads TRUE when healthy, FALSE when pressed or wire broken.
+   #EStop_Pressed := NOT #EStop_NC;
+   "ConveyorData".EStop_Active := #EStop_Pressed;
+
+   // --- Jam: sorting-junction photo-eye blocked longer than 5 s ---
+   #JamTimer(IN := #Jam_Sensor, PT := T#5S);
+   "ConveyorData".Jam_Detected := #JamTimer.Q;
+
+   // --- Sensor fault: two or more size sensors ON at once is impossible ---
+   //     (BOOL cannot be added directly in SCL, so we count with IFs.)
+   #SensorSum := 0;
+   IF #Small_Sensor THEN
+      #SensorSum := #SensorSum + 1;
+   END_IF;
+   IF #Medium_Sensor THEN
+      #SensorSum := #SensorSum + 1;
+   END_IF;
+   IF #Large_Sensor THEN
+      #SensorSum := #SensorSum + 1;
+   END_IF;
+   #SensorFault := (#SensorSum >= 2);
+
+   // --- Master alarm flag ---
+   "ConveyorData".Alarm_Active :=
+      #EStop_Pressed OR "ConveyorData".Jam_Detected OR #SensorFault;
+
+   // --- Active alarm code (priority order) ---
+   IF #EStop_Pressed THEN
+      "ConveyorData".Active_Alarm_Code := 1;
+   ELSIF "ConveyorData".Jam_Detected THEN
+      "ConveyorData".Active_Alarm_Code := 2;
+   ELSIF #SensorFault THEN
+      "ConveyorData".Active_Alarm_Code := 3;
+   ELSE
+      "ConveyorData".Active_Alarm_Code := 0;
    END_IF;
 
 END_FUNCTION_BLOCK
