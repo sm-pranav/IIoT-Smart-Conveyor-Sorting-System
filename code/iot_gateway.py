@@ -1,17 +1,20 @@
 # =============================================================
 #  IIoT Smart Conveyor Sorting System - IoT Gateway
 #
-#  Reads DB1 from the Siemens PLC (PLCSIM) over S7 protocol.
+#  Reads DB1 from the Siemens PLC (PLCSIM) over S7 protocol,
+#  publishes telemetry as JSON to MQTT.
 #
-#  Requires: pip install python-snap7
+#  Requires: pip install python-snap7 paho-mqtt
 # =============================================================
 
 import json
 import time
+import uuid
 
 import snap7
 from snap7.client import Client
 from snap7.util import get_int, get_dint, get_real, get_bool
+import paho.mqtt.client as mqtt
 
 PLC_IP   = "127.0.0.1"
 PLC_RACK = 0
@@ -19,7 +22,12 @@ PLC_SLOT = 1
 DB_NUMBER = 1
 DB_SIZE   = 32
 
-POLL_PERIOD = 2.0
+MQTT_BROKER = "broker.hivemq.com"
+MQTT_PORT   = 1883
+PUBLISH_PERIOD = 2.0
+
+SESSION_ID = "demo01"
+TOPIC_TELEMETRY = f"iiot/conveyor/{SESSION_ID}/telemetry"
 
 MODE_TEXT  = {0: "STOP", 1: "AUTO", 2: "MANUAL", 3: "FAULT"}
 ALARM_TEXT = {
@@ -49,6 +57,7 @@ def read_plc(client):
     mode_val  = get_int(data, 24)
     alarm_val = get_int(data, 28)
     return {
+        "session":        SESSION_ID,
         "total":          get_int(data, 0),
         "lane1":          get_int(data, 2),
         "lane2":          get_int(data, 4),
@@ -69,6 +78,7 @@ def read_plc(client):
         "object_present": get_bool(data, 27, 0),
         "alarm_code":     alarm_val,
         "alarm_text":     ALARM_TEXT.get(alarm_val, "Unknown alarm"),
+        "ts":             int(time.time()),
     }
 
 
@@ -86,13 +96,39 @@ def build_activity(sample):
     return "Conveyor stopped"
 
 
+def on_connect(client, userdata, flags, rc):
+    if rc == 0:
+        print(f"[MQTT] Connected to {MQTT_BROKER}")
+    else:
+        print(f"[MQTT] Connect failed (rc={rc})")
+
+
 def main():
+    print("=" * 55)
+    print("  IIoT Conveyor Gateway  (S7 -> MQTT)")
+    print("=" * 55)
+
     plc = connect_plc()
+
+    client_id = f"conveyor-gw-{uuid.uuid4().hex[:6]}"
+    try:
+        from paho.mqtt.enums import CallbackAPIVersion
+        mq = mqtt.Client(callback_api_version=CallbackAPIVersion.VERSION1,
+                         client_id=client_id)
+    except ImportError:
+        mq = mqtt.Client(client_id=client_id)
+
+    mq.on_connect = on_connect
+    mq.connect(MQTT_BROKER, MQTT_PORT, keepalive=30)
+    mq.loop_start()
+
     try:
         while True:
             try:
                 sample = read_plc(plc)
                 sample["activity"] = build_activity(sample)
+                mq.publish(TOPIC_TELEMETRY, json.dumps(sample))
+
                 flag = "ALARM" if sample["alarm_active"] else "ok   "
                 print(f"[DATA] {flag} mode={sample['mode']:<6} "
                       f"total={sample['total']:<4} "
@@ -104,12 +140,15 @@ def main():
                 try: plc.disconnect()
                 except: pass
                 plc = connect_plc()
-            time.sleep(POLL_PERIOD)
+            time.sleep(PUBLISH_PERIOD)
     except KeyboardInterrupt:
-        print("\nStopping ...")
+        print("\n[EXIT] Stopping ...")
     finally:
+        mq.loop_stop()
+        mq.disconnect()
         try: plc.disconnect()
         except: pass
+        print("[EXIT] Done.")
 
 
 if __name__ == "__main__":
