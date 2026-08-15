@@ -1,0 +1,271 @@
+﻿<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>IIoT Smart Conveyor Monitoring</title>
+
+<!-- mqtt.js over WebSockets - the only external dependency -->
+<script src="https://unpkg.com/mqtt/dist/mqtt.min.js"></script>
+
+<style>
+  :root {
+    --bg:        #0f1923;
+    --panel:     #16232f;
+    --panel-2:   #1d2f3d;
+    --line:      #24384a;
+    --text:      #cfe0ec;
+    --muted:     #7d97a8;
+    --green:     #29d17f;
+    --orange:    #f0a020;
+    --red:       #ff4d4f;
+    --blue:      #37b6ff;
+  }
+
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+
+  body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: "Segoe UI", Roboto, Arial, sans-serif;
+    padding: 16px;
+    min-height: 100vh;
+  }
+
+  .num { font-family: "Consolas", "Courier New", monospace; }
+
+  /* ---------- Header ---------- */
+  header {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    flex-wrap: wrap;
+    gap: 12px;
+    background: linear-gradient(90deg, #16232f, #1d2f3d);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px 18px;
+    margin-bottom: 16px;
+  }
+  header h1 { font-size: 20px; letter-spacing: 0.5px; }
+  header .sub { color: var(--muted); font-size: 12px; margin-top: 2px; }
+
+  .conn {
+    display: flex; align-items: center; gap: 14px; flex-wrap: wrap;
+  }
+  .status { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+  .dot {
+    width: 12px; height: 12px; border-radius: 50%;
+    background: var(--red); box-shadow: 0 0 8px var(--red);
+    transition: all .3s;
+  }
+  .dot.on { background: var(--green); box-shadow: 0 0 8px var(--green); }
+
+  .session input {
+    background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px;
+    padding: 6px 10px; font-size: 13px; width: 120px;
+  }
+  .session button, .controls button {
+    background: var(--panel-2); color: var(--text);
+    border: 1px solid var(--line); border-radius: 6px;
+    padding: 6px 12px; font-size: 13px; cursor: pointer;
+    transition: all .2s;
+  }
+  .session button:hover, .controls button:hover { border-color: var(--blue); }
+
+  /* ---------- Layout ---------- */
+  .grid { display: grid; gap: 16px; }
+  .cards { grid-template-columns: repeat(4, 1fr); }
+  .info  { grid-template-columns: repeat(6, 1fr); }
+
+  @media (max-width: 900px) {
+    .cards { grid-template-columns: repeat(2, 1fr); }
+    .info  { grid-template-columns: repeat(3, 1fr); }
+  }
+
+  .card {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-top: 3px solid var(--blue);
+    border-radius: 10px;
+    padding: 16px;
+    text-align: center;
+  }
+  .card .label { color: var(--muted); font-size: 12px; text-transform: uppercase; letter-spacing: 1px; }
+  .card .value { font-size: 42px; font-weight: 700; margin-top: 6px; transition: color .3s; }
+  .card.small  { border-top-color: var(--green); }
+  .card.medium { border-top-color: var(--orange); }
+  .card.large  { border-top-color: var(--blue); }
+  .card.total  { border-top-color: #9b6dff; }
+
+  .tile {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 14px;
+    text-align: center;
+  }
+  .tile .label { color: var(--muted); font-size: 11px; text-transform: uppercase; letter-spacing: 1px; }
+  .tile .value { font-size: 24px; font-weight: 600; margin-top: 6px; transition: color .3s; }
+
+  .pill { display: inline-block; padding: 3px 12px; border-radius: 20px; font-size: 20px; font-weight: 700; }
+  .pill.stop   { background: #37485722; color: var(--muted); }
+  .pill.auto   { background: #29d17f22; color: var(--green); }
+  .pill.manual { background: #f0a02022; color: var(--orange); }
+  .pill.fault  { background: #ff4d4f22; color: var(--red); }
+
+  /* ---------- Panels ---------- */
+  .panel {
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 10px;
+    padding: 16px;
+    margin-top: 16px;
+  }
+  .panel h2 { font-size: 14px; color: var(--muted); text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+
+  .activity {
+    display: flex; align-items: center; gap: 12px;
+    font-size: 20px; font-weight: 600;
+  }
+  .beacon {
+    width: 16px; height: 16px; border-radius: 50%;
+    background: var(--muted); transition: all .3s;
+  }
+  .beacon.run { background: var(--green); box-shadow: 0 0 10px var(--green); }
+
+  /* ---------- Alarm panel ---------- */
+  #alarmPanel { border-left: 4px solid var(--line); transition: all .3s; }
+  #alarmPanel.active {
+    border-left-color: var(--red);
+    background: #2a1417;
+    animation: pulseAlarm 1.2s infinite;
+  }
+  @keyframes pulseAlarm {
+    0%,100% { box-shadow: 0 0 0 rgba(255,77,79,0); }
+    50%     { box-shadow: 0 0 18px rgba(255,77,79,.35); }
+  }
+  .alarm-row { display: flex; justify-content: space-between; padding: 8px 0; border-bottom: 1px solid var(--line); font-size: 14px; }
+  .alarm-row:last-child { border-bottom: none; }
+  .alarm-ok { color: var(--green); }
+  .alarm-bad { color: var(--red); font-weight: 600; }
+
+  /* ---------- Controls ---------- */
+  .controls { display: flex; gap: 10px; flex-wrap: wrap; }
+  .controls button { padding: 10px 18px; font-size: 14px; font-weight: 600; }
+  .btn-start { border-color: var(--green); color: var(--green); }
+  .btn-stop  { border-color: var(--orange); color: var(--orange); }
+  .btn-reset { border-color: var(--blue); color: var(--blue); }
+  .btn-auto, .btn-manual { border-color: var(--muted); }
+
+  canvas { width: 100%; height: 220px; display: block; }
+  .footer { color: var(--muted); font-size: 11px; text-align: center; margin-top: 18px; }
+</style>
+</head>
+<body>
+
+<header>
+  <div>
+    <h1>IIoT Smart Conveyor Monitoring System</h1>
+    <div class="sub">Siemens S7-1200 &bull; PLCSIM &bull; snap7 gateway &bull; MQTT</div>
+  </div>
+  <div class="conn">
+    <div class="status">
+      <span id="dot" class="dot"></span>
+      <span id="connText">Disconnected</span>
+    </div>
+    <div class="session">
+      Session:
+      <input id="sessionId" value="demo01" />
+      <button id="connectBtn">Connect</button>
+    </div>
+  </div>
+</header>
+
+<!-- Counter cards -->
+<div class="grid cards">
+  <div class="card total">
+    <div class="label">Total Sorted</div>
+    <div class="value num" id="total">0</div>
+  </div>
+  <div class="card small">
+    <div class="label">Lane 1 &bull; Small</div>
+    <div class="value num" id="lane1">0</div>
+  </div>
+  <div class="card medium">
+    <div class="label">Lane 2 &bull; Medium</div>
+    <div class="value num" id="lane2">0</div>
+  </div>
+  <div class="card large">
+    <div class="label">Lane 3 &bull; Large</div>
+    <div class="value num" id="lane3">0</div>
+  </div>
+</div>
+
+<!-- System info -->
+<div class="grid info" style="margin-top:16px;">
+  <div class="tile">
+    <div class="label">Mode</div>
+    <div class="value"><span id="mode" class="pill stop">STOP</span></div>
+  </div>
+  <div class="tile">
+    <div class="label">Belt Speed</div>
+    <div class="value num" id="speed">0<span style="font-size:14px">%</span></div>
+  </div>
+  <div class="tile">
+    <div class="label">Throughput</div>
+    <div class="value num" id="throughput">0<span style="font-size:13px"> ppm</span></div>
+  </div>
+  <div class="tile">
+    <div class="label">OEE</div>
+    <div class="value num" id="oee">0<span style="font-size:14px">%</span></div>
+  </div>
+  <div class="tile">
+    <div class="label">Uptime</div>
+    <div class="value num" id="uptime">0s</div>
+  </div>
+  <div class="tile">
+    <div class="label">Rejects</div>
+    <div class="value num" id="reject">0</div>
+  </div>
+</div>
+
+<!-- Live activity -->
+<div class="panel">
+  <h2>Live Activity</h2>
+  <div class="activity">
+    <span id="beacon" class="beacon"></span>
+    <span id="activity">Waiting for data...</span>
+  </div>
+</div>
+
+<!-- Controls -->
+<div class="panel">
+  <h2>Remote Control</h2>
+  <div class="controls">
+    <button class="btn-start"  data-cmd="start">START</button>
+    <button class="btn-stop"   data-cmd="stop">STOP</button>
+    <button class="btn-reset"  data-cmd="reset">RESET COUNTERS</button>
+    <button class="btn-auto"   data-cmd="mode_auto">AUTO</button>
+    <button class="btn-manual" data-cmd="mode_manual">MANUAL</button>
+  </div>
+</div>
+
+<!-- Alarms -->
+<div class="panel" id="alarmPanel">
+  <h2>Alarms</h2>
+  <div id="alarmList">
+    <div class="alarm-row"><span class="alarm-ok">No active alarms</span><span></span></div>
+  </div>
+</div>
+
+<!-- Chart -->
+<div class="panel">
+  <h2>Throughput - last 30 samples (parts / min)</h2>
+  <canvas id="chart" width="1000" height="220"></canvas>
+</div>
+
+<div class="footer">Data is read from the PLC by iot_gateway.py and delivered over MQTT (broker.hivemq.com).</div>
+
+<script>const PLACEHOLDER=true;</script></body></html>
