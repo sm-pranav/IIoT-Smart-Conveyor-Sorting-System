@@ -268,4 +268,135 @@
 
 <div class="footer">Data is read from the PLC by iot_gateway.py and delivered over MQTT (broker.hivemq.com).</div>
 
-<script>const PLACEHOLDER=true;</script></body></html>
+<script>
+/* ======================================================
+   1) CONFIG + STATE
+   ====================================================== */
+const BROKER = "wss://broker.hivemq.com:8884/mqtt";
+let client = null;
+let topic  = "";
+const history = [];       // throughput samples for the chart
+const MAX_POINTS = 30;
+
+/* ======================================================
+   2) SMALL DOM HELPERS
+   ====================================================== */
+const $ = (id) => document.getElementById(id);
+
+function setText(id, value) {
+  const el = $(id);
+  if (el && el.firstChild && el.firstChild.nodeType === 3) {
+    el.firstChild.nodeValue = value;   // keep child <span> units intact
+  } else if (el) {
+    el.textContent = value;
+  }
+}
+
+function setConnected(ok) {
+  $("dot").classList.toggle("on", ok);
+  $("connText").textContent = ok ? "Connected" : "Disconnected";
+}
+
+/* ======================================================
+   3) MQTT CONNECT / SUBSCRIBE
+   ====================================================== */
+function connect() {
+  const session = $("sessionId").value.trim() || "demo01";
+  topic = `iiot/conveyor/${session}/telemetry`;
+
+  if (client) { try { client.end(true); } catch (e) {} }
+
+  const clientId = "dash-" + Math.random().toString(16).slice(2, 8);
+  client = mqtt.connect(BROKER, { clientId, connectTimeout: 8000, reconnectPeriod: 3000 });
+
+  client.on("connect", () => {
+    setConnected(true);
+    client.subscribe(topic);
+    $("activity").textContent = "Connected. Waiting for PLC data...";
+  });
+  client.on("reconnect", () => { $("connText").textContent = "Reconnecting..."; });
+  client.on("close",  () => setConnected(false));
+  client.on("error",  (e) => { console.error(e); setConnected(false); });
+
+  client.on("message", (t, payload) => {
+    try { update(JSON.parse(payload.toString())); }
+    catch (e) { console.error("Bad payload", e); }
+  });
+}
+
+function sendCommand(cmd) {
+  if (!client || !client.connected) { alert("Connect first."); return; }
+  const session = $("sessionId").value.trim() || "demo01";
+  client.publish(`iiot/conveyor/${session}/cmd`, JSON.stringify({ cmd }));
+}
+
+/* ======================================================
+   4) UPDATE THE UI FROM ONE TELEMETRY SAMPLE
+   ====================================================== */
+function update(d) {
+  setText("total",  d.total);
+  setText("lane1",  d.lane1);
+  setText("lane2",  d.lane2);
+  setText("lane3",  d.lane3);
+  setText("reject", d.reject);
+  setText("speed",  d.speed);
+  setText("throughput", d.throughput);
+  setText("oee",    Math.round(d.oee));
+  setText("uptime", formatUptime(d.uptime));
+
+  // Mode pill
+  const pill = $("mode");
+  pill.textContent = d.mode;
+  pill.className = "pill " + (d.mode || "stop").toLowerCase();
+
+  // OEE colour coding
+  $("oee").style.color = d.oee >= 70 ? "var(--green)"
+                       : d.oee >= 40 ? "var(--orange)" : "var(--red)";
+
+  // Reject colour
+  $("reject").style.color = d.reject > 0 ? "var(--orange)" : "var(--text)";
+
+  // Activity + running beacon
+  $("activity").textContent = d.activity || "Idle";
+  $("beacon").classList.toggle("run", !!d.motor_running);
+
+  // Alarms
+  renderAlarms(d);
+
+  // Chart history
+  history.push(Number(d.throughput) || 0);
+  if (history.length > MAX_POINTS) history.shift();
+  drawChart();
+}
+
+function formatUptime(sec) {
+  sec = Number(sec) || 0;
+  const h = Math.floor(sec / 3600);
+  const m = Math.floor((sec % 3600) / 60);
+  const s = sec % 60;
+  if (h > 0) return `${h}h ${m}m`;
+  if (m > 0) return `${m}m ${s}s`;
+  return `${s}s`;
+}
+
+function renderAlarms(d) {
+  const panel = $("alarmPanel");
+  const list = $("alarmList");
+  const active = !!d.alarm_active;
+  panel.classList.toggle("active", active);
+
+  if (active) {
+    const time = new Date().toLocaleTimeString();
+    list.innerHTML =
+      `<div class="alarm-row"><span class="alarm-bad">&#9888; ${d.alarm_text}</span>` +
+      `<span class="num">${time}</span></div>`;
+  } else {
+    list.innerHTML =
+      `<div class="alarm-row"><span class="alarm-ok">No active alarms</span><span></span></div>`;
+  }
+}
+
+/* ======================================================
+   5) CANVAS LINE CHART (no libraries)
+   ====================================================== */
+function drawChart(){}connect();</script></body></html>
