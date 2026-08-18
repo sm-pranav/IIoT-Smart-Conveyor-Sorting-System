@@ -1,4 +1,4 @@
-﻿<!DOCTYPE html>
+<!DOCTYPE html>
 <html lang="en">
 <head>
 <meta charset="UTF-8" />
@@ -399,4 +399,80 @@ function renderAlarms(d) {
 /* ======================================================
    5) CANVAS LINE CHART (no libraries)
    ====================================================== */
-function drawChart(){}connect();</script></body></html>
+function drawChart() {
+  const cv = $("chart");
+  const ctx = cv.getContext("2d");
+  const W = cv.width, H = cv.height;
+  const padL = 44, padB = 24, padT = 14, padR = 14;
+  const plotW = W - padL - padR;
+  const plotH = H - padT - padB;
+
+  ctx.clearRect(0, 0, W, H);
+
+  // scale
+  const maxVal = Math.max(10, ...history);
+  const stepX = plotW / (MAX_POINTS - 1);
+
+  // grid + y labels
+  ctx.strokeStyle = "#24384a";
+  ctx.fillStyle = "#7d97a8";
+  ctx.font = "11px Consolas, monospace";
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = padT + (plotH * i / 4);
+    ctx.beginPath();
+    ctx.moveTo(padL, y);
+    ctx.lineTo(W - padR, y);
+    ctx.stroke();
+    const val = Math.round(maxVal * (4 - i) / 4);
+    ctx.fillText(String(val), 6, y + 4);
+  }
+
+  if (history.length < 2) return;
+
+  // area fill
+  ctx.beginPath();
+  history.forEach((v, i) => {
+    const x = padL + i * stepX;
+    const y = padT + plotH - (v / maxVal) * plotH;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  const lastX = padL + (history.length - 1) * stepX;
+  ctx.lineTo(lastX, padT + plotH);
+  ctx.lineTo(padL, padT + plotH);
+  ctx.closePath();
+  ctx.fillStyle = "rgba(55,182,255,0.12)";
+  ctx.fill();
+
+  // line
+  ctx.beginPath();
+  history.forEach((v, i) => {
+    const x = padL + i * stepX;
+    const y = padT + plotH - (v / maxVal) * plotH;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.strokeStyle = "#37b6ff";
+  ctx.lineWidth = 2;
+  ctx.stroke();
+
+  // last point marker
+  const ly = padT + plotH - (history[history.length - 1] / maxVal) * plotH;
+  ctx.fillStyle = "#37b6ff";
+  ctx.beginPath();
+  ctx.arc(lastX, ly, 3.5, 0, Math.PI * 2);
+  ctx.fill();
+}
+
+/* ======================================================
+   6) WIRE UP EVENTS + AUTO CONNECT
+   ====================================================== */
+$("connectBtn").addEventListener("click", connect);
+document.querySelectorAll(".controls button").forEach((b) => {
+  b.addEventListener("click", () => sendCommand(b.dataset.cmd));
+});
+
+drawChart();
+connect();   // connect automatically on page load
+</script>
+</body>
+</html>
