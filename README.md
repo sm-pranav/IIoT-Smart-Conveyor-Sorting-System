@@ -1,4 +1,4 @@
-﻿# IIoT Smart Conveyor Sorting System
+# IIoT Smart Conveyor Sorting System
 
 A size-based conveyor sorter running on real Siemens S7-1200 PLC code (simulated in PLCSIM), with a Python gateway that reads the PLC over the S7 protocol and streams live production data to a browser dashboard over MQTT. The whole thing runs on one laptop, no physical hardware required.
 
@@ -58,11 +58,11 @@ The PLC program is deliberately split by language. The discrete control (motor l
 
 ```
 01_Conveyor_Sorting/
-â”œâ”€â”€ README.md
-â””â”€â”€ code/
-    â”œâ”€â”€ conveyor_plc_structured_text.st   # SCL source: DB1 + FB3 (counters/KPIs) + FB4 (alarms)
-    â”œâ”€â”€ iot_gateway.py                     # reads DB1 over S7, bridges to MQTT
-    â””â”€â”€ dashboard.html                     # browser dashboard (open directly, no server)
+├── README.md
+└── code/
+    ├── conveyor_plc_structured_text.st   # SCL source: DB1 + FB3 (counters/KPIs) + FB4 (alarms)
+    ├── iot_gateway.py                     # reads DB1 over S7, bridges to MQTT
+    └── dashboard.html                     # browser dashboard (open directly, no server)
 ```
 
 The SCL file carries DB1 and the two Structured Text blocks. The two Ladder blocks (FB1, FB2), the OB1 calls, and the tag table are built in TIA Portal by hand; everything you need to recreate them is written out below.
@@ -204,7 +204,36 @@ The gateway connects to PLCSIM at `127.0.0.1`, rack 0, slot 1, reads 32 bytes fr
 
 Open `code/dashboard.html` in a browser by double-clicking it. Set the Session field to the same id as the gateway (`demo01` by default) and click Connect. The status dot turns green when it is connected to the broker.
 
+## How to verify it works
+
+With PLCSIM in RUN, open a watch table in TIA Portal and add the tags below. Modify inputs and watch the outputs and DB values react. The gateway terminal and the dashboard should mirror everything.
+
+1. Enable the safety input. Set `E_Stop` to 1 (normally closed means 1 is healthy). The belt cannot start while it is 0.
+2. Start the belt. Set `Start_Button` to 1, then back to 0. `Conveyor_Motor` turns on and stays on, which confirms the latch.
+3. Set the speed. Set `Speed_Setpoint` to 13824. `ConveyorData.Speed_Actual` should read about 50 (percent), and `VFD_Speed_Ref` should follow the setpoint while the motor runs.
+4. Sort a box. Set `Sensor_Small` to 1, then back to 0. `Diverter_Lane1` pulses on for about two seconds, and `Lane1_Count` and `Total_Count` each increase by one. Repeat with `Sensor_Medium` (lane 2) and `Sensor_Large` (lane 3).
+5. Make a reject. Set `Sensor_Entry` to 1 and leave it for more than three seconds without triggering a size sensor. `Reject_Count` increases by one.
+6. Trigger a jam. Set `Jam_Sensor` to 1 and leave it for more than five seconds. `Jam_Detected` and `Alarm_Active` go true, `Mode` becomes 3, `Alarm_Beacon` flashes, and the motor stops. Set it back to 0 and the alarm clears on its own.
+7. Test the E-Stop. Set `E_Stop` to 0. The motor stops immediately and `EStop_Active` goes true. Set it back to 1 to release.
+
+On the dashboard you should see the lane cards and total climb as you sort, the mode and speed update, OEE and throughput move, the alarm panel turn red during a fault, and the throughput trend fill in over time. The Start, Stop, Reset, AUTO, and MANUAL buttons should drive the PLC (the gateway prints each command it forwards). The gateway prints a status line every cycle showing mode, counts, OEE, and throughput.
+
+## Troubleshooting
+
+| Symptom | Cause and fix |
+|:--|:--|
+| Dashboard and gateway show only zeros or nonsense | DB1 is still optimized. Turn off "Optimized block access" on DB1, recompile, and download again. |
+| Gateway cannot connect or reports an unreachable peer | PLCSIM is not in RUN, or the address is wrong. Use `127.0.0.1`, rack 0, slot 1, and set the CPU to RUN. |
+| Gateway raises "snap7 library not found" on Windows | Place the 64-bit `snap7.dll` next to `iot_gateway.py` or in `C:\Windows\System32`, matching your Python bitness. |
+| A diverter never fires | Sorting only runs while the belt is on. Start the motor first. |
+| Motor will not start | `E_Stop` must read 1 (normally closed healthy) and no alarm may be active. |
+| Dashboard status dot stays red | The session id must match the gateway, and the browser needs to reach `broker.hivemq.com` on WebSocket port 8884. |
+
+## Limitations and scope
+
+This is a prototype that runs entirely in PLCSIM. Sensors are simulated by forcing inputs, so it demonstrates the control logic and the data path but not physical wiring or commissioning. The MQTT link uses a public broker with no authentication or encryption, which is fine for a demo but not for production; a real deployment would use a private broker with TLS, or OPC UA straight to the PLC. The OEE and throughput formulas are simplified, the counters are 16-bit and reset on a power cycle, and there is no historical logging. Reasonable next steps would be adding a database for trends, moving the PLC link to OPC UA, and extending the sort to barcode or destination-based routing.
 
 ## Author
 
 Pranav S M
+
