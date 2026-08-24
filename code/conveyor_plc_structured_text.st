@@ -1,9 +1,9 @@
-// ============================================================
+﻿// ============================================================
 // IIoT Smart Conveyor Sorting System
 // Siemens S7-1200 (CPU 1214C) - TIA Portal V18
 // SCL source: DB1 (ConveyorData), FB3 (ProductionCounter), FB4 (AlarmHandler)
 //
-// NOTE: DB1 must be NON-OPTIMIZED for snap7 byte-offset reads.
+// DB1 must use non-optimized (standard) access for snap7 byte-offset reads.
 // ============================================================
 
 
@@ -310,3 +310,4 @@ BEGIN
    END_IF;
 
 END_FUNCTION_BLOCK
+
